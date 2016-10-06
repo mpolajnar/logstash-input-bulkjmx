@@ -222,6 +222,7 @@ class LogStash::Inputs::BulkJmx < LogStash::Inputs::Base
         @logger.debug("Treat queries #{thread_hash_conf['queries']}")
         thread_hash_conf['queries'].each do |query|
           values = {}
+          any_commit_done = FALSE
           query['objects'].each do |object_name,attr_specs|
             jmx_objects = JMX::MBean.find_all_by_name(object_name, :connection => jmx_connection)
             unless jmx_objects.length > 0
@@ -247,10 +248,19 @@ class LogStash::Inputs::BulkJmx < LogStash::Inputs::Base
                     values[attr_alias] = value
                   end
                 end
+                if query['objects'].length == 1 then
+                  # If we query only one object, it might be a wildcard query, so commit each one separately
+                  send_event_to_queue(queue, thread_hash_conf['host'], query['name'], values)
+                  values = {}
+                  any_commit_done = TRUE
+                end
               end
             end
           end
-          send_event_to_queue(queue, thread_hash_conf['host'], query['name'], values)
+          if not any_commit_done then
+            # This happens when we query by more than one object, or when there were no objects found
+            send_event_to_queue(queue, thread_hash_conf['host'], query['name'], values)
+          end
         end
         jmx_connection.close
       rescue LogStash::ShutdownSignal

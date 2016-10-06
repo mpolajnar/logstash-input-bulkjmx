@@ -219,6 +219,49 @@ describe LogStash::Inputs::BulkJmx do
       expect(event.get('runtime_cpu')).to eq 1
     end
 
+    it "query wildcard object" do
+      File.open(File.join(jmx_config_path,"my.config.json"), "wb") { |file|  file.write(<<-EOT)
+      {
+        "host" : "localhost",
+        "port" : 1234,
+        "queries": [{
+          "name" : "VitalResourcePoolStats",
+          "objects" : {
+            "java.lang:type=Runtime,*" : {
+              "mem" : "runtime_mem",
+              "cpu" : "runtime_cpu"
+            }
+          }
+        }]
+      }
+      EOT
+      }
+
+      expect(JMX::MBean).to receive(:connection).with({:host => "localhost", :port => 1234, :url => nil}).and_return(nil)
+      expect(JMX::MBean).to receive(:find_all_by_name).with("java.lang:type=Runtime,*", :connection => nil).and_return(
+          [DummyJmxObject.new("java.lang:type=Runtime,name=x", {"cpu" => 1, "mem" => "ok"}),
+           DummyJmxObject.new("java.lang:type=Runtime,name=y", {"cpu" => 2})])
+
+      subject.register
+      Thread.new(subject) { sleep 0.5; subject.close } # force the plugin to exit
+      subject.run(queue)
+
+      sleep 0.5
+
+      expect(queue.size).to eq(2)
+      event = queue.pop
+      expect(event).to be_a LogStash::Event
+      expect(event.get('name')).to eq "VitalResourcePoolStats"
+      expect(event.get('runtime_mem')).to eq "ok"
+      expect(event.get('runtime_cpu')).to eq 1
+
+      event = queue.pop
+      expect(event).to be_a LogStash::Event
+      expect(event.get('name')).to eq "VitalResourcePoolStats"
+      expect(event.get('runtime_mem')).to eq ""
+      expect(event.get('runtime_cpu')).to eq 2
+    end
+
     it "query no objects" do
       File.open(File.join(jmx_config_path,"my.config.json"), "wb") { |file|  file.write(<<-EOT)
       {
