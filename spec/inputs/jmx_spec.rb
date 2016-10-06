@@ -1,6 +1,6 @@
 # encoding: utf-8
 require "logstash/devutils/rspec/spec_helper"
-require "logstash/inputs/jmx"
+require "logstash/inputs/bulk_jmx"
 require "logstash/codecs/plain"
 require 'stud/temporary'
 require "jmx4r"
