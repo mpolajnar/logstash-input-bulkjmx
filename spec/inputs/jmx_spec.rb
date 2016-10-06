@@ -5,22 +5,22 @@ require "logstash/codecs/plain"
 require 'stud/temporary'
 require "jmx4r"
 
-describe LogStash::Inputs::Jmx do
+describe LogStash::Inputs::BulkJmx do
 
   let(:jmx_config_path) { Stud::Temporary.directory }
   after(:each) do
     FileUtils.remove_dir(jmx_config_path)
   end
 
-  subject { LogStash::Inputs::Jmx.new("path" => jmx_config_path)}
+  subject { LogStash::Inputs::BulkJmx.new("path" => jmx_config_path)}
 
   context "#validate_configuration(conf_hash)" do
     #Reference to error messages
-    MISSING_CONFIG_PARAMETER = LogStash::Inputs::Jmx::MISSING_CONFIG_PARAMETER
-    BAD_TYPE_CONFIG_PARAMETER = LogStash::Inputs::Jmx::BAD_TYPE_CONFIG_PARAMETER
-    BAD_TYPE_QUERY = LogStash::Inputs::Jmx::BAD_TYPE_QUERY
-    MISSING_QUERY_PARAMETER = LogStash::Inputs::Jmx::MISSING_QUERY_PARAMETER
-    BAD_TYPE_QUERY_PARAMETER = LogStash::Inputs::Jmx::BAD_TYPE_QUERY_PARAMETER
+    MISSING_CONFIG_PARAMETER = LogStash::Inputs::BulkJmx::MISSING_CONFIG_PARAMETER
+    BAD_TYPE_CONFIG_PARAMETER = LogStash::Inputs::BulkJmx::BAD_TYPE_CONFIG_PARAMETER
+    BAD_TYPE_QUERY = LogStash::Inputs::BulkJmx::BAD_TYPE_QUERY
+    MISSING_QUERY_PARAMETER = LogStash::Inputs::BulkJmx::MISSING_QUERY_PARAMETER
+    BAD_TYPE_QUERY_PARAMETER = LogStash::Inputs::BulkJmx::BAD_TYPE_QUERY_PARAMETER
 
     let(:minimal_config) { {"host"=>"localhost","port"=>1234,"queries" => [] } }
 
@@ -80,7 +80,7 @@ describe LogStash::Inputs::Jmx do
   end
 
   context "establish JMX connection" do
-    subject { LogStash::Inputs::Jmx.new("path" => jmx_config_path, "nb_thread" => 1, "polling_frequency" => 1)}
+    subject { LogStash::Inputs::BulkJmx.new("path" => jmx_config_path, "nb_thread" => 1, "polling_frequency" => 1)}
 
     let(:queue) { Queue.new }
     it "pass host/port connection parameters to jmx4r" do
@@ -174,7 +174,7 @@ describe LogStash::Inputs::Jmx do
   end
 
   context "query attributes" do
-    subject { LogStash::Inputs::Jmx.new("path" => jmx_config_path, "nb_thread" => 1, "polling_frequency" => 1)}
+    subject { LogStash::Inputs::BulkJmx.new("path" => jmx_config_path, "nb_thread" => 1, "polling_frequency" => 1)}
 
     let(:queue) { Queue.new }
     it "query multiple attributes from multiple objects" do

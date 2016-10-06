@@ -20,7 +20,7 @@ require "logstash/json"
 #       path => "/apps/logstash_conf/jmxconf"
 #       //Optional, default 60s
 #       polling_frequency => 15
-#       type => "jmx"
+#       type => "bulk_jmx"
 #       //Optional, default 4
 #       nb_thread => 4
 #     }
@@ -70,15 +70,15 @@ require "logstash/json"
 #       "@version" => "1",
 #       "@timestamp" => "2014-02-18T20:57:27.688Z",
 #       "host" => "192.168.1.2",
-#       "type" => "jmx",
+#       "type" => "bulk_jmx",
 #       "HeapMemoryUsage" => 1234567,
 #       "NotYetFinalizedObjects" => 0,
 #       "RuntimeStartTime" => 1234567,
 #       "RuntimeVendor" => "Dummy Corporation"
 #     }
 #
-class LogStash::Inputs::Jmx < LogStash::Inputs::Base
-  config_name 'jmx'
+class LogStash::Inputs::BulkJmx < LogStash::Inputs::Base
+  config_name 'bulk_jmx'
 
   #Class Var
   attr_accessor :regexp_group_alias_object
