@@ -110,7 +110,7 @@ class LogStash::Inputs::BulkJmx < LogStash::Inputs::Base
     end
 
     #Validate parameters type in configuration
-    {"host" => String, "port" => Fixnum}.each do |param, expected_type|
+    {"host" => String, "port" => Fixnum, "context" => Hash}.each do |param, expected_type|
       if conf_hash.has_key?(param) && !conf_hash[param].instance_of?(expected_type)
         validation_errors << BAD_TYPE_CONFIG_PARAMETER % { :param => param, :expected => expected_type, :actual => conf_hash[param].class }
       end
@@ -204,6 +204,8 @@ class LogStash::Inputs::BulkJmx < LogStash::Inputs::Base
         thread_hash_conf = queue_conf.pop
         @logger.debug("Retrieve config #{thread_hash_conf} from queue conf")
 
+        context = thread_hash_conf['context'] || {}
+
         @logger.debug('Check if jmx connection need a user/password')
         if thread_hash_conf.has_key?('username') and thread_hash_conf.has_key?('password')
           @logger.debug("Connect to #{thread_hash_conf['host']}:#{thread_hash_conf['port']} with user #{thread_hash_conf['username']}")
@@ -221,7 +223,7 @@ class LogStash::Inputs::BulkJmx < LogStash::Inputs::Base
 
         @logger.debug("Treat queries #{thread_hash_conf['queries']}")
         thread_hash_conf['queries'].each do |query|
-          values = {}
+          values = context.clone
           any_commit_done = FALSE
           query['objects'].each do |object_name,attr_specs|
             jmx_objects = JMX::MBean.find_all_by_name(object_name, :connection => jmx_connection)
@@ -251,7 +253,7 @@ class LogStash::Inputs::BulkJmx < LogStash::Inputs::Base
                 if query['objects'].length == 1 then
                   # If we query only one object, it might be a wildcard query, so commit each one separately
                   send_event_to_queue(queue, thread_hash_conf['host'], query['name'], values)
-                  values = {}
+                  values = context.clone
                   any_commit_done = TRUE
                 end
               end

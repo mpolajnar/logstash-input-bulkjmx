@@ -262,11 +262,14 @@ describe LogStash::Inputs::BulkJmx do
       expect(event.get('runtime_cpu')).to eq 2
     end
 
-    it "query no objects" do
+    it "query no objects but context" do
       File.open(File.join(jmx_config_path,"my.config.json"), "wb") { |file|  file.write(<<-EOT)
       {
         "host" : "localhost",
         "port" : 1234,
+        "context": {
+          "test": "text"
+        },
         "queries": [{
           "name" : "VitalResourcePoolStats",
           "objects" : { }
@@ -287,6 +290,7 @@ describe LogStash::Inputs::BulkJmx do
       event = queue.pop
       expect(event).to be_a LogStash::Event
       expect(event.get('name')).to eq "VitalResourcePoolStats"
+      expect(event.get('test')).to eq "text"
     end
   end
 
