@@ -241,7 +241,7 @@ class LogStash::Inputs::BulkJmx < LogStash::Inputs::Base
                   end
                   if value.instance_of? Java::JavaxManagementOpenmbean::CompositeDataSupport
                     value.each do |subvalue|
-                      values[attr_alias + "." + subvalue.to_s] = value[subvalue]
+                      values[attr_alias + "_" + subvalue.to_s] = value[subvalue]
                     end
                   else
                     values[attr_alias] = value
