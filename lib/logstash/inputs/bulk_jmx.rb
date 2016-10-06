@@ -234,7 +234,7 @@ class LogStash::Inputs::BulkJmx < LogStash::Inputs::Base
               jmx_objects.each do |jmx_object|
                 attr_specs.each do |attr_name,attr_alias|
                   begin
-                    value = jmx_object.send(attr_name)
+                    value = jmx_object.send(attr_name.snake_case)
                   rescue Exception => ex
                     @logger.warn("Failed retrieving metrics for attribute #{attr_name} on object #{jmx_object.object_name}")
                     @logger.warn(ex.message)
