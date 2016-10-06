@@ -36,57 +36,45 @@ require "logstash/json"
 #       "username" : "user",
 #       //Optional, the password to connect to JMX
 #       "password": "pass",
-#       //Optional, use this alias as a prefix in the metric name. If not set use <host>_<port>
-#       "alias" : "test.homeserver.elasticsearch",
-#       //Required, list of JMX metrics to retrieve
+#       //Required, list of events with JMX metrics to generate
 #       "queries" : [
 #       {
-#         //Required, the object name of Mbean to request
-#         "object_name" : "java.lang:type=Memory",
-#         //Optional, use this alias in the metrics value instead of the object_name
-#         "object_alias" : "Memory"
-#       }, {
-#         "object_name" : "java.lang:type=Runtime",
-#         //Optional, set of attributes to retrieve. If not set retrieve
-#         //all metrics available on the configured object_name.
-#         "attributes" : [ "Uptime", "StartTime" ],
-#         "object_alias" : "Runtime"
-#       }, {
-#         //object_name can be configured with * to retrieve all matching Mbeans
-#         "object_name" : "java.lang:type=GarbageCollector,name=*",
-#         "attributes" : [ "CollectionCount", "CollectionTime" ],
-#         //object_alias can be based on specific value from the object_name thanks to ${<varname>}.
-#         //In this case ${type} will be replaced by GarbageCollector...
-#         "object_alias" : "${type}.${name}"
-#       }, {
-#         "object_name" : "java.nio:type=BufferPool,name=*",
-#         "object_alias" : "${type}.${name}"
-#       } ]
+#         //Required, the object name of event
+#         "name": "jvm_status",
+#         //Required, the description of JMX objects and attributes to fetch
+#         objects: {
+#           //Required, the JMX object selector (name of Mbean to fetch; can contain wildcards)
+#           "java.lang:type=Memory": {
+#             // JMX attributes of this object, mapped to fields of the generated event
+#             "HeapMemoryUsage": "HeapMemoryUsage",
+#             "ObjectPendingFinalizationCount": "NotYetFinalizedObjects"
+#           },
+#           "java.lang:type=Runtime": {
+#             "StartTime": "RuntimeStartTime",
+#             "VmVendor": "RuntimeVendor"
+#           }
+#       }]
 #     }
 #
-# Here are examples of generated events. When returned metrics value type is 
-# number/boolean it is stored in `metric_value_number` event field
-# otherwise it is stored in `metric_value_string` event field.
+# Only one event is created on each polling with attributes HeapMemoryUsage, NotYetFinalizedObjects, RuntimeStartTime and
+# RuntimeVendor. Wildcards can be used for JMX object selectors. If there are multiple objects that match the wildcard
+# selector, what happens depends on whether there is only one selector in the "objects" hash or not:
+# - When there are multiple elements in the "objects" hash, like in the previous example, only the first JMX object for each
+#   selector is observed and, if any selector matches multiple JMX objects, a warning is issued into the log.
+# - When there is only one element in the "objects" hash and its selector matches multiple JMX objects, an event is created
+#   for each of them.
+#
+# Here is an example of a generated event.
 # [source,ruby]
 #     {
 #       "@version" => "1",
 #       "@timestamp" => "2014-02-18T20:57:27.688Z",
 #       "host" => "192.168.1.2",
-#       "path" => "/apps/logstash_conf/jmxconf",
 #       "type" => "jmx",
-#       "metric_path" => "test.homeserver.elasticsearch.GarbageCollector.ParNew.CollectionCount",
-#       "metric_value_number" => 2212
-#     }
-#
-# [source,ruby]
-#     {
-#       "@version" => "1",
-#       "@timestamp" => "2014-02-18T20:58:06.376Z",
-#       "host" => "localhost",
-#       "path" => "/apps/logstash_conf/jmxconf",
-#       "type" => "jmx",
-#       "metric_path" => "test.homeserver.elasticsearch.BufferPool.mapped.ObjectName",
-#       "metric_value_string" => "java.nio:type=BufferPool,name=mapped"
+#       "HeapMemoryUsage" => 1234567,
+#       "NotYetFinalizedObjects" => 0,
+#       "RuntimeStartTime" => 1234567,
+#       "RuntimeVendor" => "Dummy Corporation"
 #     }
 #
 class LogStash::Inputs::Jmx < LogStash::Inputs::Base
@@ -122,7 +110,7 @@ class LogStash::Inputs::Jmx < LogStash::Inputs::Base
     end
 
     #Validate parameters type in configuration
-    {"host" => String, "port" => Fixnum, "alias" => String }.each do |param, expected_type|
+    {"host" => String, "port" => Fixnum}.each do |param, expected_type|
       if conf_hash.has_key?(param) && !conf_hash[param].instance_of?(expected_type)
         validation_errors << BAD_TYPE_CONFIG_PARAMETER % { :param => param, :expected => expected_type, :actual => conf_hash[param].class }
       end
@@ -138,18 +126,34 @@ class LogStash::Inputs::Jmx < LogStash::Inputs::Base
             next
           end
           #Check required parameters in each query
-          ["object_name"].each do |param|
+          ["name", "objects"].each do |param|
             validation_errors << MISSING_QUERY_PARAMETER % [param,index] unless query.has_key?(param)
           end
           #Validate parameters type in each query
-          {"object_name" => String, "object_alias" => String }.each do |param, expected_type|
+          {"name" => String}.each do |param, expected_type|
             if query.has_key?(param) && !query[param].instance_of?(expected_type)
               validation_errors << BAD_TYPE_QUERY_PARAMETER % { :param => param, :index => index, :expected => expected_type, :actual => query[param].class }
             end
           end
 
-          if query.has_key?("attributes") && !query["attributes"].respond_to?(:each)
-            validation_errors << BAD_TYPE_QUERY_PARAMETER % { :param => 'attributes', :index => index, :expected => Enumerable, :actual => query['attributes'].class }
+          if query.has_key?('objects') then
+            unless query['objects'].respond_to?(:[]) && query['objects'].respond_to?(:has_key?) && query['objects'].respond_to?(:each)
+              validation_errors << BAD_TYPE_QUERY_PARAMETER % { :param => 'objects', :index => index, :expected => Hash, :actual => query['objects'].class }
+            else
+              query['objects'].each do |key, attr_mapping|
+                unless key.instance_of?(String)
+                  validation_errors << BAD_TYPE_QUERY_PARAMETER % { :param => "objects[*]", :index => index, :expected => String, :actual => query[param].class }
+                end
+                unless attr_mapping.respond_to?(:[]) && attr_mapping.respond_to?(:has_key?)
+                  validation_errors << BAD_TYPE_QUERY_PARAMETER % { :param => "objects['" + key + "']", :index => index, :expected => Hash, :actual => spec_list.class }
+                end
+
+                attr_mapping.each do |attr, attr_alias|
+                  validation_errors << BAD_TYPE_QUERY_PARAMETER % { :param => "objects[*][*]", :index => index, :expected => String, :actual => query[param].class } unless attr.instance_of?(String)
+                  validation_errors << BAD_TYPE_QUERY_PARAMETER % { :param => "objects[*][*][*]", :index => index, :expected => String, :actual => query[param].class } unless attr_alias.instance_of?(String)
+                end
+              end
+            end
           end
         end
       end
@@ -169,28 +173,24 @@ class LogStash::Inputs::Jmx < LogStash::Inputs::Base
   end
 
   private
-  def send_event_to_queue(queue,host,metric_path,metric_value)
+  def send_event_to_queue(queue, host, name, values)
     @logger.debug('Send event to queue to be processed by filters/outputs')
     event = LogStash::Event.new
-    event('host', host)
-    event('path', @path)
+    event.set('host', host)
     event.set('type', @type)
+    event.set('name', name)
+
     number_type = [Fixnum, Bignum, Float]
     boolean_type = [TrueClass, FalseClass]
-    metric_path_substituted = metric_path.gsub(' ','_').gsub('"','')
-    if number_type.include?(metric_value.class)
-      @logger.debug("The value #{metric_value} is of type number: #{metric_value.class}")
-      event.set('metric_path', metric_path_substituted)
-      event.set('metric_value_number', metric_value)
-    elsif boolean_type.include?(metric_value.class)
-      @logger.debug("The value #{metric_value} is of type boolean: #{metric_value.class}")
-      event.set('metric_path', metric_path_substituted+'_bool')
-      event.set('metric_value_number', metric_value ? 1 : 0)
-    else
-      @logger.debug("The value #{metric_value} is not of type number: #{metric_value.class}")
-      event.set('metric_path', metric_path_substituted)
-      event.set('metric_value_string', metric_value.to_s)
+
+    values.each do |key, value|
+      if boolean_type.include?(value.class) then
+        value = value ? 1 : 0
+      end
+
+      event.set(key, number_type.include?(value.class) ? value : value.to_s)
     end
+
     decorate(event)
     queue << event
   end
@@ -219,76 +219,38 @@ class LogStash::Inputs::Jmx < LogStash::Inputs::Base
                                                  :url => thread_hash_conf['url']
         end
 
-
-        if thread_hash_conf.has_key?('alias')
-          @logger.debug("Set base_metric_path to alias: #{thread_hash_conf['alias']}")
-          base_metric_path = thread_hash_conf['alias']
-        else
-          @logger.debug("Set base_metric_path to host_port: #{thread_hash_conf['host']}_#{thread_hash_conf['port']}")
-          base_metric_path = "#{thread_hash_conf['host']}_#{thread_hash_conf['port']}"
-        end
-
-
         @logger.debug("Treat queries #{thread_hash_conf['queries']}")
         thread_hash_conf['queries'].each do |query|
-          @logger.debug("Find all objects name #{query['object_name']}")
-          jmx_object_name_s = JMX::MBean.find_all_by_name(query['object_name'], :connection => jmx_connection)
-
-          if jmx_object_name_s.length > 0
-            jmx_object_name_s.each do |jmx_object_name|
-              if query.has_key?('object_alias')
-                object_name = replace_alias_object(query['object_alias'],jmx_object_name.object_name.to_s)
-                @logger.debug("Set object_name to object_alias: #{object_name}")
-              else
-                object_name = jmx_object_name.object_name.to_s
-                @logger.debug("Set object_name to jmx object_name: #{object_name}")
+          values = {}
+          query['objects'].each do |object_name,attr_specs|
+            jmx_objects = JMX::MBean.find_all_by_name(object_name, :connection => jmx_connection)
+            unless jmx_objects.length > 0
+              @logger.warn("No jmx object found for #{object_name}")
+            else
+              if jmx_objects.length > 1 and query['objects'].length > 1
+                @logger.warn("Multiple objects found for #{object_name} and there are multiple queries object names; I am handling only the first resulting object!")
+                jmx_objects = [jmx_objects[0]]
               end
-
-              if query.has_key?('attributes')
-                @logger.debug("Retrieves attributes #{query['attributes']} to #{jmx_object_name.object_name}")
-                query['attributes'].each do |attribute|
+              jmx_objects.each do |jmx_object|
+                attr_specs.each do |attr_name,attr_alias|
                   begin
-                    jmx_attribute_value = jmx_object_name.send(attribute.snake_case)
-                    if jmx_attribute_value.instance_of? Java::JavaxManagementOpenmbean::CompositeDataSupport
-                      @logger.debug('The jmx value is a composite_data one')
-                      jmx_attribute_value.each do |jmx_attribute_value_composite|
-                        @logger.debug("Get jmx value #{jmx_attribute_value[jmx_attribute_value_composite]} for attribute #{attribute}.#{jmx_attribute_value_composite} to #{jmx_object_name.object_name}")
-                        send_event_to_queue(queue, thread_hash_conf['host'], "#{base_metric_path}.#{object_name}.#{attribute}.#{jmx_attribute_value_composite}", jmx_attribute_value[jmx_attribute_value_composite])
-                      end
-                    else
-                      @logger.debug("Get jmx value #{jmx_attribute_value} for attribute #{attribute} to #{jmx_object_name.object_name}")
-                      send_event_to_queue(queue, thread_hash_conf['host'], "#{base_metric_path}.#{object_name}.#{attribute}", jmx_attribute_value)
-                    end
+                    value = jmx_object.send(attr_name)
                   rescue Exception => ex
-                    @logger.warn("Failed retrieving metrics for attribute #{attribute} on object #{jmx_object_name.object_name}")
+                    @logger.warn("Failed retrieving metrics for attribute #{attr_name} on object #{jmx_object.object_name}")
                     @logger.warn(ex.message)
                   end
-                end
-              else
-                @logger.debug("No attribute to retrieve define on #{jmx_object_name.object_name}, will retrieve all")
-                jmx_object_name.attributes.each_key do |attribute|
-                  begin
-                    jmx_attribute_value = jmx_object_name.send(attribute)
-                    if jmx_attribute_value.instance_of? Java::JavaxManagementOpenmbean::CompositeDataSupport
-                      @logger.debug('The jmx value is a composite_data one')
-                      jmx_attribute_value.each do |jmx_attribute_value_composite|
-                        @logger.debug("Get jmx value #{jmx_attribute_value[jmx_attribute_value_composite]} for attribute #{jmx_object_name.attributes[attribute]}.#{jmx_attribute_value_composite} to #{jmx_object_name.object_name}")
-                        send_event_to_queue(queue, thread_hash_conf['host'], "#{base_metric_path}.#{object_name}.#{jmx_object_name.attributes[attribute]}.#{jmx_attribute_value_composite}", jmx_attribute_value[jmx_attribute_value_composite])
-                      end
-                    else
-                      @logger.debug("Get jmx value #{jmx_attribute_value} for attribute #{jmx_object_name.attributes[attribute]} to #{jmx_object_name.object_name}")
-                      send_event_to_queue(queue, thread_hash_conf['host'], "#{base_metric_path}.#{object_name}.#{jmx_object_name.attributes[attribute]}", jmx_attribute_value)
+                  if value.instance_of? Java::JavaxManagementOpenmbean::CompositeDataSupport
+                    value.each do |subvalue|
+                      values[attr_alias + "." + subvalue.to_s] = value[subvalue]
                     end
-                  rescue Exception => ex
-                    @logger.warn("Failed retrieving metrics for attribute #{attribute} on object #{jmx_object_name.object_name}")
-                    @logger.warn(ex.message)
+                  else
+                    values[attr_alias] = value
                   end
                 end
               end
             end
-          else
-            @logger.warn("No jmx object found for #{query['object_name']}")
           end
+          send_event_to_queue(queue, thread_hash_conf['host'], query['name'], values)
         end
         jmx_connection.close
       rescue LogStash::ShutdownSignal
@@ -338,11 +300,11 @@ class LogStash::Inputs::Jmx < LogStash::Inputs::Base
               @queue_conf << conf_hash
             else
               @logger.warn("Issue with configuration file", :file => file_conf,
-              :validation_errors => validation_errors)
+                           :validation_errors => validation_errors)
             end
           rescue Exception => ex
             @logger.warn("Issue loading configuration from file", :file => file_conf,
-              :exception => ex.message, :backtrace => ex.backtrace)
+                         :exception => ex.message, :backtrace => ex.backtrace)
           end
         end
         @logger.debug('Wait until the queue conf is empty')
@@ -362,7 +324,7 @@ class LogStash::Inputs::Jmx < LogStash::Inputs::Base
         end
       end
     rescue LogStash::ShutdownSignal
-        #exiting
+      #exiting
     rescue Exception => ex
       @logger.error(ex.message)
       @logger.error(ex.backtrace.join("\n"))

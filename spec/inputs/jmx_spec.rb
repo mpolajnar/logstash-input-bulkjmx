@@ -48,14 +48,15 @@ describe LogStash::Inputs::Jmx do
 
     context "query objects in configuration" do
       it "return [] for valid query message" do
-        #Minimal query object
-        minimal_config["queries"] = [{"object_name" => "minimal"}]
-        expect(subject.validate_configuration(minimal_config)).to eq([])
         #Full query object
         minimal_config["queries"] = [{
-          "object_name" => "java.lang:type=Runtime",
-          "attributes" => [ "Uptime", "StartTime" ],
-          "object_alias" => "Runtime"}]
+          "name" => "test",
+          "objects" => {
+              "java.lang:type=Runtime" => {
+                  "time" => "runtime_time"
+              }
+          }
+        }]
         expect(subject.validate_configuration(minimal_config)).to eq([])
       end
       it "return error message for invalid query object type" do
@@ -65,18 +66,15 @@ describe LogStash::Inputs::Jmx do
 
       it "return error message for missing mandatory query parameter" do
         minimal_config["queries"] = [ {} ]
-        expect(subject.validate_configuration(minimal_config)).to eq([MISSING_QUERY_PARAMETER % ["object_name",0] ])
+        expect(subject.validate_configuration(minimal_config)).to eq([MISSING_QUERY_PARAMETER % ["name",0], MISSING_QUERY_PARAMETER % ["objects",0] ])
       end
 
       it "return error message for invalid query parameters type" do
-        minimal_config["queries"] = [ { "object_name" => 1234} ]
-        expect(subject.validate_configuration(minimal_config)).to eq([BAD_TYPE_QUERY_PARAMETER % {:param => "object_name", :index => 0, :expected => String, :actual => Fixnum} ])
+        minimal_config["queries"] = [ { "name" => 1234, "objects" => {}} ]
+        expect(subject.validate_configuration(minimal_config)).to eq([BAD_TYPE_QUERY_PARAMETER % {:param => "name", :index => 0, :expected => String, :actual => Fixnum} ])
 
-        minimal_config["queries"] = [ { "object_name" => "1234", "object_alias" => 1234} ]
-        expect(subject.validate_configuration(minimal_config)).to eq([BAD_TYPE_QUERY_PARAMETER % {:param => "object_alias", :index => 0, :expected => String, :actual => Fixnum} ])
-
-        minimal_config["queries"] = [ { "object_name" => "1234", "attributes" => 1234} ]
-        expect(subject.validate_configuration(minimal_config)).to eq([BAD_TYPE_QUERY_PARAMETER % {:param => "attributes", :index => 0, :expected => Enumerable, :actual => Fixnum} ])
+        minimal_config["queries"] = [ { "name" => "1234", "objects" => 1234} ]
+        expect(subject.validate_configuration(minimal_config)).to eq([BAD_TYPE_QUERY_PARAMETER % {:param => "objects", :index => 0, :expected => Hash, :actual => Fixnum} ])
       end
     end
   end
@@ -153,4 +151,100 @@ describe LogStash::Inputs::Jmx do
       subject.run(queue)
     end
   end
+
+  class DummyJmxObject
+    def initialize(object_name, values)
+      @object_name = object_name
+      @values = values
+    end
+
+    def object_name()
+      return @object_name
+    end
+
+    def attributes()
+      attributes = Hash.new
+      @values.keys.each{|v| attributes[v] = v}
+      return attributes;
+    end
+
+    def send(key)
+      return @values[key]
+    end
+  end
+
+  context "query attributes" do
+    subject { LogStash::Inputs::Jmx.new("path" => jmx_config_path, "nb_thread" => 1, "polling_frequency" => 1)}
+
+    let(:queue) { Queue.new }
+    it "query multiple attributes from multiple objects" do
+      File.open(File.join(jmx_config_path,"my.config.json"), "wb") { |file|  file.write(<<-EOT)
+      {
+        "host" : "localhost",
+        "port" : 1234,
+        "queries": [{
+          "name" : "VitalResourcePoolStats",
+          "objects" : {
+            "java.lang:type=Runtime" : {
+              "mem" : "runtime_mem",
+              "cpu" : "runtime_cpu"
+            },
+            "java.lang:type=Runtime2" : {
+              "mem" : "runtime2_mem"
+            }
+          }
+        }]
+      }
+      EOT
+      }
+
+      expect(JMX::MBean).to receive(:connection).with({:host => "localhost", :port => 1234, :url => nil}).and_return(nil)
+      expect(JMX::MBean).to receive(:find_all_by_name).with("java.lang:type=Runtime", :connection => nil).and_return(
+          [DummyJmxObject.new("java.lang:type=Runtime", {"cpu" => 1, "mem" => "ok"})])
+      expect(JMX::MBean).to receive(:find_all_by_name).with("java.lang:type=Runtime2", :connection => nil).and_return(
+          [DummyJmxObject.new("java.lang:type=Runtime2", {"cpu" => 2, "mem" => "bad"})])
+
+      subject.register
+      Thread.new(subject) { sleep 0.5; subject.close } # force the plugin to exit
+      subject.run(queue)
+
+      sleep 0.5
+
+      expect(queue.size).to eq(1)
+      event = queue.pop
+      expect(event).to be_a LogStash::Event
+      expect(event.get('name')).to eq "VitalResourcePoolStats"
+      expect(event.get('runtime_mem')).to eq "ok"
+      expect(event.get('runtime2_mem')).to eq "bad"
+      expect(event.get('runtime_cpu')).to eq 1
+    end
+
+    it "query no objects" do
+      File.open(File.join(jmx_config_path,"my.config.json"), "wb") { |file|  file.write(<<-EOT)
+      {
+        "host" : "localhost",
+        "port" : 1234,
+        "queries": [{
+          "name" : "VitalResourcePoolStats",
+          "objects" : { }
+        }]
+      }
+      EOT
+      }
+
+      expect(JMX::MBean).to receive(:connection).with({:host => "localhost", :port => 1234, :url => nil}).and_return(nil)
+
+      subject.register
+      Thread.new(subject) { sleep 0.5; subject.close } # force the plugin to exit
+      subject.run(queue)
+
+      sleep 0.5
+
+      expect(queue.size).to eq(1)
+      event = queue.pop
+      expect(event).to be_a LogStash::Event
+      expect(event.get('name')).to eq "VitalResourcePoolStats"
+    end
+  end
+
 end
