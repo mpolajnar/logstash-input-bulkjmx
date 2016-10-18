@@ -258,7 +258,7 @@ describe LogStash::Inputs::BulkJmx do
       event = queue.pop
       expect(event).to be_a LogStash::Event
       expect(event.get('name')).to eq "VitalResourcePoolStats"
-      expect(event.get('runtime_mem')).to eq ""
+      expect(event.get('runtime_mem')).to be_nil
       expect(event.get('runtime_cpu')).to eq 2
     end
 

@@ -188,7 +188,7 @@ class LogStash::Inputs::BulkJmx < LogStash::Inputs::Base
         value = value ? 1 : 0
       end
 
-      event.set(key, number_type.include?(value.class) ? value : value.to_s)
+      event.set(key, number_type.include?(value.class) ? value : value.to_s) unless value.nil?
     end
 
     decorate(event)
@@ -239,10 +239,10 @@ class LogStash::Inputs::BulkJmx < LogStash::Inputs::Base
                   begin
                     value = jmx_object.send(attr_name.snake_case)
                   rescue Exception => ex
-                    @logger.warn("Failed retrieving metrics for attribute #{attr_name} on object #{jmx_object.object_name}")
-                    @logger.warn(ex.message)
+                    @logger.debug("Failed retrieving metrics for attribute #{attr_name} on object #{jmx_object.object_name}")
+                    @logger.debug(ex.message)
                   end
-                  if value.instance_of? Java::JavaxManagementOpenmbean::CompositeDataSupport
+                  if not value.nil? and value.instance_of? Java::JavaxManagementOpenmbean::CompositeDataSupport
                     value.each do |subvalue|
                       values[attr_alias + "_" + subvalue.to_s] = value[subvalue]
                     end
